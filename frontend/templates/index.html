@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Security Dashboard</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Plotly.js for charting -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* Dark Gray */
+            color: #f9fafb; /* Light Gray */
+        }
+        .card {
+            background-color: #1f2937; /* Darker Gray */
+            border: 1px solid #374151;
+            border-radius: 0.75rem;
+        }
+        .card-header {
+            background-color: #374151; /* Medium Gray */
+            border-bottom: 1px solid #4b5563;
+        }
+        .plotly .grid {
+             stroke: rgba(255, 255, 255, 0.1) !important;
+        }
+        .table-responsive {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        /* Custom scrollbar for webkit browsers */
+        .table-responsive::-webkit-scrollbar {
+            width: 8px;
+        }
+        .table-responsive::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        .table-responsive::-webkit-scrollbar-thumb {
+            background-color: #4b5563;
+            border-radius: 10px;
+            border: 2px solid #1f2937;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-6">
+
+    <div class="container mx-auto">
+        <!-- Header -->
+        <h1 class="text-3xl font-bold text-center mb-6 text-cyan-400">Network Security Dashboard</h1>
+
+        <!-- Top Row: Gauges and Status -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <!-- Real-Time Traffic Monitoring -->
+            <div class="card shadow-lg col-span-1">
+                <div class="card-header p-4">
+                    <h2 class="text-lg font-semibold">Real-Time Traffic Monitoring</h2>
+                </div>
+                <div class="p-4">
+                    <div id="live-traffic-gauge" class="w-full h-64"></div>
+                    <div id="threat-indicator" class="text-center mt-2"></div>
+                </div>
+            </div>
+
+            <!-- Traffic Composition -->
+            <div class="card shadow-lg col-span-1">
+                <div class="card-header p-4">
+                    <h2 class="text-lg font-semibold">Traffic Composition</h2>
+                </div>
+                <div class="p-4">
+                    <div id="traffic-composition" class="w-full h-[300px]"></div>
+                </div>
+            </div>
+
+            <!-- System Status -->
+            <div class="card shadow-lg col-span-1">
+                <div class="card-header p-4">
+                    <h2 class="text-lg font-semibold">System Status</h2>
+                </div>
+                <div class="p-4 space-y-4 text-lg h-[300px] flex flex-col justify-center">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-300">GPU Acceleration:</span>
+                        <span id="gpu-status" class="px-3 py-1 text-sm font-medium rounded-full"></span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-300">Packet Processing:</span>
+                        <span id="processing-status" class="px-3 py-1 text-sm font-medium rounded-full"></span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-300">Last Update:</span>
+                        <span id="last-update" class="text-gray-400 font-mono"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Middle Row: Traffic Trend -->
+        <div class="grid grid-cols-1 gap-6 mb-6">
+            <div class="card shadow-lg">
+                <div class="card-header p-4">
+                    <h2 class="text-lg font-semibold">Traffic Trend (Last 5 Minutes)</h2>
+                </div>
+                <div class="p-4">
+                    <div id="traffic-trend" class="w-full h-80"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Row: Alerts Table -->
+        <div class="grid grid-cols-1 gap-6">
+            <div class="card shadow-lg">
+                <div class="card-header p-4">
+                    <h2 class="text-lg font-semibold">Recent Security Alerts</h2>
+                </div>
+                <div class="p-4">
+                    <div id="alerts-table-container" class="table-responsive"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Data Simulation and Storage ---
+        // This object replicates the behavior of the Python TrafficData class.
+        const trafficData = {
+            history: [], // Stores {timestamp, normal, malicious, threat_level}
+            
+            // Adds a new data point and cleans up old ones.
+            update: function(normal, malicious, threat_level) {
+                const now = new Date();
+                this.history.push({
+                    timestamp: now,
+                    normal: normal,
+                    malicious: malicious,
+                    threat_level: threat_level
+                });
+                
+                // Keep only the last 5 minutes of data
+                const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+                this.history = this.history.filter(d => d.timestamp > fiveMinutesAgo);
+            }
+        };
+
+        // --- Main Dashboard Update Function ---
+        function updateDashboard() {
+            try {
+                // 1. Simulate new data (replicating the Python logic)
+                const normal = Math.floor(Math.random() * (200 - 50 + 1)) + 50;
+                const malicious = Math.floor(Math.random() * 51);
+                // Avoid division by zero
+                const threat_level = malicious / (normal + malicious + 0.001); 
+                
+                // 2. Update the data history
+                trafficData.update(normal, malicious, threat_level);
+
+                // 3. Update UI Components
+                updateGauge(threat_level);
+                updateThreatIndicator(threat_level);
+                updateCompositionPie(normal, malicious);
+                updateSystemStatus();
+                updateTrendChart();
+                updateAlertsTable();
+
+            } catch (e) {
+                console.error("Error updating dashboard:", e);
+                // In case of an error, display an alert
+                 const threatIndicator = document.getElementById('threat-indicator');
+                 threatIndicator.innerHTML = `
+                    <div class="bg-red-900 border border-red-400 text-red-100 px-4 py-3 rounded-lg" role="alert">
+                        <strong class="font-bold">Connection Error!</strong>
+                        <span class="block sm:inline">Could not update dashboard.</span>
+                    </div>`;
+            }
+        }
+
+        // --- Chart and UI Element Update Functions ---
+
+        /**
+         * Updates the threat level gauge.
+         * @param {number} threat_level - A value between 0 and 1.
+         */
+        function updateGauge(threat_level) {
+            const gaugeData = [{
+                type: 'indicator',
+                mode: 'gauge+number',
+                value: threat_level * 100,
+                number: { suffix: '%', font: {color: '#f9fafb'} },
+                gauge: {
+                    axis: { range: [null, 100], tickwidth: 1, tickcolor: "darkblue" },
+                    bar: { color: "#4f46e5" }, // Indigo
+                    bgcolor: "rgba(255, 255, 255, 0.1)",
+                    borderwidth: 2,
+                    bordercolor: "#4b5563",
+                    steps: [
+                        { range: [0, 30], color: '#10b981' }, // Emerald
+                        { range: [30, 70], color: '#f59e0b' }, // Amber
+                        { range: [70, 100], color: '#ef4444' }  // Red
+                    ],
+                    threshold: {
+                        line: { color: "#f9fafb", width: 4 },
+                        thickness: 0.75,
+                        value: threat_level * 100
+                    }
+                }
+            }];
+
+            const layout = {
+                title: { text: 'Current Threat Level', font: { color: '#9ca3af' }},
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: { t: 50, b: 30, l: 30, r: 30 },
+                height: 250
+            };
+            
+            Plotly.react('live-traffic-gauge', gaugeData, layout, {responsive: true});
+        }
+        
+        /**
+         * Updates the threat level indicator text/alert box.
+         * @param {number} threat_level - A value between 0 and 1.
+         */
+        function updateThreatIndicator(threat_level) {
+             const indicator = document.getElementById('threat-indicator');
+             let alertHtml = '';
+             if (threat_level > 0.3) {
+                 alertHtml = `<div class="bg-red-500/20 text-red-300 text-sm font-medium p-3 rounded-lg">High Threat Level Detected!</div>`;
+             } else if (threat_level > 0.1) {
+                 alertHtml = `<div class="bg-yellow-500/20 text-yellow-300 text-sm font-medium p-3 rounded-lg">Moderate Threat Level</div>`;
+             } else {
+                 alertHtml = `<div class="bg-green-500/20 text-green-300 text-sm font-medium p-3 rounded-lg">Normal Operations</div>`;
+             }
+             indicator.innerHTML = alertHtml;
+        }
+
+        /**
+         * Updates the traffic composition pie chart.
+         * @param {number} normal - Count of normal packets.
+         * @param {number} malicious - Count of malicious packets.
+         */
+        function updateCompositionPie(normal, malicious) {
+            const compositionData = [{
+                values: [normal, malicious],
+                labels: ['Normal', 'Malicious'],
+                type: 'pie',
+                hole: 0.5,
+                marker: { colors: ['#10b981', '#ef4444'] },
+                textinfo: 'percent',
+                textfont: { size: 16, color: '#111827' },
+                hoverinfo: 'label+value'
+            }];
+
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: { t: 10, b: 10, l: 10, r: 10 },
+                height: 300,
+                showlegend: true,
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: -0.2,
+                    font: { color: '#d1d5db' }
+                }
+            };
+
+            Plotly.react('traffic-composition', compositionData, layout, {responsive: true});
+        }
+        
+        /**
+         * Updates the system status indicators (GPU, Processing, Last Update).
+         */
+        function updateSystemStatus() {
+            // GPU status
+            const gpuStatusEl = document.getElementById('gpu-status');
+            const isGpuActive = Math.random() > 0.1;
+            gpuStatusEl.textContent = isGpuActive ? "Active" : "Inactive";
+            gpuStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${isGpuActive ? 'bg-green-500 text-green-900' : 'bg-red-500 text-red-900'}`;
+
+            // Processing status
+            const processingStatusEl = document.getElementById('processing-status');
+            const isProcessingNormal = Math.random() > 0.1;
+            processingStatusEl.textContent = isProcessingNormal ? "Normal" : "Delayed";
+            processingStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${isProcessingNormal ? 'bg-green-500 text-green-900' : 'bg-yellow-500 text-yellow-900'}`;
+
+            // Last update time
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+        }
+
+        /**
+         * Updates the main traffic trend line chart.
+         */
+        function updateTrendChart() {
+            const history = trafficData.history;
+            const timestamps = history.map(d => d.timestamp);
+            const normalTraffic = history.map(d => d.normal);
+            const maliciousTraffic = history.map(d => d.malicious);
+
+            const trendData = [
+                {
+                    x: timestamps,
+                    y: normalTraffic,
+                    name: 'Normal Traffic',
+                    mode: 'lines',
+                    line: { color: '#10b981', width: 2 }
+                },
+                {
+                    x: timestamps,
+                    y: maliciousTraffic,
+                    name: 'Malicious Traffic',
+                    mode: 'lines',
+                    line: { color: '#ef4444', width: 2 }
+                }
+            ];
+
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: { t: 30, b: 50, l: 60, r: 30 },
+                height: 320,
+                xaxis: { 
+                    title: 'Time',
+                    color: '#9ca3af',
+                    gridcolor: 'rgba(255, 255, 255, 0.1)'
+                },
+                yaxis: { 
+                    title: 'Packets per second',
+                    color: '#9ca3af',
+                    gridcolor: 'rgba(255, 255, 255, 0.1)'
+                },
+                hovermode: 'x unified',
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: 1.02,
+                    xanchor: 'right',
+                    x: 1,
+                    font: { color: '#d1d5db' }
+                }
+            };
+            
+            Plotly.react('traffic-trend', trendData, layout, {responsive: true});
+        }
+        
+        /**
+         * Generates and displays the table of recent security alerts.
+         */
+        function updateAlertsTable() {
+            const threats = ['DDoS', 'Port Scan', 'Malware', 'Brute Force', 'SQL Injection'];
+            const severities = {
+                High: 'bg-red-500 text-red-100',
+                Medium: 'bg-yellow-500 text-yellow-100',
+                Low: 'bg-green-500 text-green-100'
+            };
+            
+            let tableHtml = `
+                <table class="w-full text-sm text-left text-gray-400">
+                    <thead class="text-xs text-gray-300 uppercase bg-gray-700/50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3">Time</th>
+                            <th scope="col" class="px-6 py-3">Source IP</th>
+                            <th scope="col" class="px-6 py-3">Destination IP</th>
+                            <th scope="col" class="px-6 py-3">Threat Type</th>
+                            <th scope="col" class="px-6 py-3">Severity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            for (let i = 0; i < 5; i++) {
+                const now = new Date();
+                const alertTime = new Date(now.getTime() - i * 10000 * Math.random());
+                const sourceIp = `192.168.1.${Math.floor(Math.random() * 50) + 1}`;
+                const destIp = `10.0.0.${Math.floor(Math.random() * 10) + 1}`;
+                const threat = threats[Math.floor(Math.random() * threats.length)];
+                const severity = Object.keys(severities)[Math.floor(Math.random() * 3)];
+                const severityClass = severities[severity];
+                
+                tableHtml += `
+                    <tr class="border-b border-gray-700 hover:bg-gray-600/50">
+                        <td class="px-6 py-4 font-mono">${alertTime.toLocaleTimeString()}</td>
+                        <td class="px-6 py-4 font-mono">${sourceIp}</td>
+                        <td class="px-6 py-4 font-mono">${destIp}</td>
+                        <td class="px-6 py-4">${threat}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 font-semibold text-xs rounded-md ${severityClass}">
+                                ${severity}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            tableHtml += `</tbody></table>`;
+            document.getElementById('alerts-table-container').innerHTML = tableHtml;
+        }
+
+        // --- Initial Load and Interval Setup ---
+        
+        // Run the update function once on page load.
+        window.onload = function() {
+            updateDashboard();
+        };
+
+        // Set the interval to update the dashboard every 2 seconds.
+        setInterval(updateDashboard, 2000);
+
+        // Make charts responsive to window resizing
+        window.onresize = function() {
+            Plotly.Plots.resize('live-traffic-gauge');
+            Plotly.Plots.resize('traffic-composition');
+            Plotly.Plots.resize('traffic-trend');
+        };
+
+    </script>
+</body>
+</html>
