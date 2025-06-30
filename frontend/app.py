@@ -6,17 +6,25 @@ from datetime import datetime
 app = Flask(__name__)
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
+@app.route("/")
+def index():
+    return jsonify({
+        "message": "Network Security API is running.",
+        "endpoints": ["/api/live_traffic", "/api/status"],
+        "timestamp": datetime.now().isoformat()
+    })
+
 @app.route("/api/live_traffic")
 def live_traffic():
     try:
         raw = redis_client.get('live_traffic')
         if raw is None:
             raise ValueError("No live data in Redis.")
-        
+
         data = json.loads(raw)
         print("[DEBUG] Served live_traffic data:", data)
 
-        # Ensure expected fields
+        # Ensure proper formatting
         normal = int(data.get("normal", 0))
         malicious = int(data.get("malicious", 0))
         total = normal + malicious
@@ -52,5 +60,20 @@ def live_traffic():
             "flags": "ERR"
         })
 
+@app.route("/api/status")
+def status():
+    try:
+        return jsonify({
+            "status": "OK",
+            "timestamp": datetime.now().isoformat(),
+            "redis_ping": redis_client.ping()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "ERROR",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        })
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5000)

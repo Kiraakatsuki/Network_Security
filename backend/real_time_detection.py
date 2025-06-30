@@ -1,4 +1,3 @@
-# === real_time_detection.py with debug and Redis health fix ===
 import joblib
 import pyshark
 import pandas as pd
@@ -9,25 +8,29 @@ import socket
 import numpy as np
 from collections import defaultdict
 
-# Load pipeline and expected features
+# Load model pipeline and expected features
 try:
     model = joblib.load('backend/model/traffic_classifier_model.pkl')
     expected_features = joblib.load('backend/model/expected_features.pkl')
 except Exception as e:
-    raise SystemExit(f"Failed to load model or features: {e}")
+    raise SystemExit(f"[ERROR] Failed to load model or features: {e}")
 
+# Redis setup
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
+# Protocol mapping and statistics holders
 PROTOCOL_MAP = {'TCP': 0, 'UDP': 1, 'ICMP': 2, 'OTHER': 3}
 port_stats = defaultdict(int)
 flag_stats = defaultdict(int)
 
+# Convert IP to int
 def ip_to_int(ip):
     try:
         return int(socket.inet_aton(ip).hex(), 16)
     except:
         return 0
 
+# Categorize port range
 def categorize_port(port):
     if port <= 1023:
         return 'well_known'
@@ -36,6 +39,7 @@ def categorize_port(port):
     else:
         return 'dynamic'
 
+# Extract features from each packet
 def extract_features(packet):
     features = defaultdict(lambda: 0)
     try:
@@ -60,16 +64,15 @@ def extract_features(packet):
             port_stats[features['dst_port']] += 1
             flag_stats[features['flags']] += 1
     except Exception as e:
-        print(f"Feature extraction error: {e}")
+        print(f"[ERROR] Feature extraction failed: {e}")
     return dict(features)
 
+# Process a batch of features and push to Redis
 def process_batch(batch):
     df = pd.DataFrame(batch).fillna(0)
 
-    # Enforce correct data types
     for col in ['src_ip', 'dst_ip', 'length', 'src_port', 'dst_port']:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
-
     for col in ['protocol', 'flags', 'dst_port_category', 'src_port_category']:
         df[col] = df[col].astype(str).fillna('UNKNOWN')
 
@@ -77,7 +80,7 @@ def process_batch(batch):
         X = df[expected_features]
         preds = model.predict(X)
     except Exception as e:
-        print(f"Inference error: {e}")
+        print(f"[ERROR] Inference failed: {e}")
         return
 
     last = batch[-1]
@@ -97,29 +100,32 @@ def process_batch(batch):
         "flag_distribution": dict(flag_stats)
     }
 
-    print("[INFO] Processed Batch:", output)
+    print(f"[INFO] Processed Batch: {output['sample_size']} packets | Malicious: {output['malicious']}")
 
     try:
         pipe = redis_client.pipeline()
         pipe.set('live_traffic', json.dumps(output))
         pipe.set('port_statistics', json.dumps(output['top_ports']))
         pipe.set('flag_statistics', json.dumps(output['flag_distribution']))
+        pipe.lpush('traffic_history', json.dumps(output))      # Store history
+        pipe.ltrim('traffic_history', 0, 299)                  # Keep last 300 batches
         pipe.publish('traffic_updates', json.dumps(output))
         pipe.execute()
     except Exception as e:
-        print(f"Redis error: {e}")
+        print(f"[ERROR] Redis push failed: {e}")
 
+# Live capture
 def capture_and_publish(interface='eth0', batch_size=2):
-    print(f"[INFO] Starting packet capture on '{interface}' (batch size = {batch_size})")
+    print(f"[INFO] Starting packet capture on {interface} (batch size = {batch_size})")
     capture = pyshark.LiveCapture(interface=interface)
+
     batch = []
     for packet in capture.sniff_continuously():
         feat = extract_features(packet)
-        print(f"[DEBUG] Extracted: {feat}")
+        print(f"[DEBUG] Packet features: {feat}")
         if feat:
             batch.append(feat)
         if len(batch) >= batch_size:
-            print("[INFO] Processing batch...")
             process_batch(batch)
             batch = []
 
@@ -127,4 +133,4 @@ if __name__ == "__main__":
     try:
         capture_and_publish()
     except KeyboardInterrupt:
-        print("[INFO] Capture stopped")
+        print("[INFO] Packet capture stopped.")

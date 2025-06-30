@@ -1,175 +1,169 @@
 import dash
+from dash import dcc, html, Input, Output
 import dash_bootstrap_components as dbc
-import plotly.graph_objs as go
-import pandas as pd
+import plotly.graph_objects as go
 from collections import deque
-from dash import dcc, html
-from dash.dependencies import Input, Output, State
-from datetime import datetime, timedelta
+import pandas as pd
+from datetime import datetime
 import requests
 
-# Initialize Dash app with Bootstrap theme
-app = dash.Dash(__name__, 
-                external_stylesheets=[dbc.themes.BOOTSTRAP],
-                meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}])
+# Initialize Dash app
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[
+        dbc.themes.BOOTSTRAP,
+        "https://use.fontawesome.com/releases/v5.15.4/css/all.css"
+    ],
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}]
+)
 
-server = app.server  # WSGI entry point for deployment
+app.title = "Security OS Dashboard"
+server = app.server
 
-class TrafficData:
-    def __init__(self, maxlen=150):
-        self.history = deque(maxlen=maxlen)
+# Historical data buffer
+traffic_history = deque(maxlen=150)
+alert_history = deque(maxlen=5)
 
-    def update(self, normal, malicious, threat_level):
-        self.history.append({
-            'timestamp': datetime.now(),
-            'normal': normal,
-            'malicious': malicious,
-            'threat_level': threat_level
-        })
+# Styling
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+<head>
+    {%metas%}
+    <title>Security OS Dashboard</title>
+    {%favicon%}
+    {%css%}
+    <style>
+        body { background-color: #161A30; color: #F0F3F5; font-family: 'Poppins', sans-serif; }
+        .card { background: rgba(30,30,45,0.5); border-radius: 1rem; }
+        .stat-card-title { font-size: 0.9rem; color: #A9B4CC; text-transform: uppercase; }
+        .stat-card-value { font-size: 2.25rem; font-weight: 600; color: #F0F3F5; }
+        .stat-card-value.threat { color: #E91E63; }
+    </style>
+</head>
+<body>
+    {%app_entry%}
+    <footer>
+        {%config%}
+        {%scripts%}
+        {%renderer%}
+    </footer>
+</body>
+</html>
+'''
 
-    def to_dataframe(self):
-        return pd.DataFrame(self.history)
+def create_stat_card(title, value_id):
+    return dbc.Card(
+        dbc.CardBody([
+            html.P(title, className="stat-card-title"),
+            html.H3(id=value_id, className="stat-card-value")
+        ]),
+        className="text-start"
+    )
 
-traffic_data = TrafficData()
+# Layout
+app.layout = dbc.Container(fluid=True, className="p-4 p-md-5", children=[
+    dcc.Interval(id='update-interval', interval=2000, n_intervals=0),
 
-app.layout = html.Div([
-    dcc.Store(id='data-store', data={'history': []}),
-    dcc.Interval(id='interval-component', interval=2000, n_intervals=0),
-
-    dbc.Row([dbc.Col(html.H1('Network Security Dashboard', className="text-center mb-4"), width=12)]),
+    html.Div([
+        html.H1("Security OS", className="fw-bold"),
+        html.P(id="current-time", className="text-muted")
+    ], className="mb-4"),
 
     dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Real-Time Traffic Monitoring"),
-                dbc.CardBody([
-                    dcc.Graph(id='live-traffic-gauge', config={'displayModeBar': False}),
-                    html.Div(id='threat-indicator', className="text-center mt-2")
-                ])
-            ])
-        ], md=4),
+        dbc.Col(create_stat_card("Total Traffic", "total-traffic-value"), lg=4, md=6, className="mb-4"),
+        dbc.Col(create_stat_card("Threat Level", "threat-level-value"), lg=4, md=6, className="mb-4"),
+        dbc.Col(create_stat_card("Active Alerts", "active-alerts-value"), lg=4, md=12, className="mb-4"),
+    ]),
+
+    dbc.Row([
+        dbc.Col(dbc.Card([
+            dbc.CardHeader("Traffic Trend"),
+            dbc.CardBody(dcc.Graph(id='traffic-trend-graph', config={'displayModeBar': False}))
+        ]), lg=8, className="mb-4"),
+
         dbc.Col([
             dbc.Card([
                 dbc.CardHeader("Traffic Composition"),
-                dbc.CardBody([
-                    dcc.Graph(id='traffic-composition', config={'displayModeBar': False})
-                ])
-            ])
-        ], md=4),
-        dbc.Col([
+                dbc.CardBody(dcc.Graph(id='traffic-composition-pie', config={'displayModeBar': False}, style={'height': '200px'}))
+            ], className="mb-4"),
             dbc.Card([
-                dbc.CardHeader("System Status"),
-                dbc.CardBody([
-                    html.Div([
-                        html.Div([html.Span("GPU Acceleration: "), html.Span(id='gpu-status', className="badge")]),
-                        html.Div([html.Span("Packet Processing: "), html.Span(id='processing-status', className="badge")]),
-                        html.Div([html.Span("Last Update: "), html.Span(id='last-update', className="text-muted")])
-                    ])
-                ])
+                dbc.CardHeader("Alerts Feed"),
+                dbc.CardBody(id='alerts-panel', style={'height': '230px', 'overflowY': 'auto'})
             ])
-        ], md=4)
-    ], className="mb-4"),
-
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Traffic Trend (Last 5 Minutes)"),
-                dbc.CardBody([
-                    dcc.Graph(id='traffic-trend', config={'displayModeBar': False})
-                ])
-            ])
-        ], width=12)
-    ], className="mb-4"),
-
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Recent Security Alerts"),
-                dbc.CardBody([
-                    html.Div(id='alerts-table', className="table-responsive")
-                ])
-            ])
-        ], width=12)
+        ], lg=4, className="mb-4")
     ])
-], className="container-fluid")
+])
 
 @app.callback(
-    [Output('live-traffic-gauge', 'figure'),
-     Output('traffic-composition', 'figure'),
-     Output('traffic-trend', 'figure'),
-     Output('threat-indicator', 'children'),
-     Output('gpu-status', 'children'),
-     Output('processing-status', 'children'),
-     Output('last-update', 'children'),
-     Output('alerts-table', 'children'),
-     Output('data-store', 'data')],
-    [Input('interval-component', 'n_intervals')],
-    [State('data-store', 'data')]
+    Output('total-traffic-value', 'children'),
+    Output('threat-level-value', 'children'),
+    Output('threat-level-value', 'className'),
+    Output('active-alerts-value', 'children'),
+    Output('traffic-trend-graph', 'figure'),
+    Output('traffic-composition-pie', 'figure'),
+    Output('alerts-panel', 'children'),
+    Output('current-time', 'children'),
+    Input('update-interval', 'n_intervals')
 )
-def update_dashboard(n, stored_data):
+def update_dashboard(n):
     try:
-        res = requests.get('http://localhost:5000/api/live_traffic')
-        res.raise_for_status()
-        data = res.json()
-
-        normal = data.get("normal", 0)
-        malicious = data.get("malicious", 0)
-        threat_level = data.get("threat_level", 0)
-
-        traffic_data.update(normal, malicious, threat_level)
-        df = traffic_data.to_dataframe()
-
-        gauge_fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=threat_level * 100,
-            number={"suffix": "%"},
-            gauge={
-                'axis': {'range': [0, 100]},
-                'steps': [
-                    {'range': [0, 30], 'color': "lightgreen"},
-                    {'range': [30, 70], 'color': "orange"},
-                    {'range': [70, 100], 'color': "red"}
-                ]
-            }
-        ))
-        gauge_fig.update_layout(title='Current Threat Level', height=250, margin=dict(t=30, b=30, l=30, r=30))
-
-        composition_fig = go.Figure(data=[go.Pie(
-            labels=['Normal Traffic', 'Malicious Traffic'],
-            values=[normal, malicious],
-            hole=0.4,
-            marker=dict(colors=['#28a745', '#dc3545'])
-        )])
-        composition_fig.update_layout(height=250, margin=dict(t=30, b=30, l=30, r=30))
-
-        trend_fig = go.Figure()
-        trend_fig.add_trace(go.Scatter(x=df['timestamp'], y=df['normal'], mode='lines+markers', name='Normal Traffic', line=dict(color='#28a745')))
-        trend_fig.add_trace(go.Scatter(x=df['timestamp'], y=df['malicious'], mode='lines+markers', name='Malicious Traffic', line=dict(color='#dc3545')))
-        trend_fig.update_layout(height=350, xaxis_title='Time', yaxis_title='Packets/sec', hovermode='x unified', margin=dict(t=30, b=50))
-
-        alert_color = "success" if threat_level < 0.1 else "warning" if threat_level < 0.3 else "danger"
-        alert_msg = "Normal Operations" if alert_color == "success" else "Moderate Threat Level" if alert_color == "warning" else "High Threat Level Detected!"
-        threat_alert = dbc.Alert(alert_msg, color=alert_color)
-
-        alerts_table = html.Div("Live packet preview and flags: src_port={} dst_port={} flags={}".format(
-            data.get("src_port"), data.get("dst_port"), data.get("flags")
-        ))
-
-        gpu_status = dbc.Badge(data.get("gpu", "Inactive"), color="success" if data.get("gpu") == "Active" else "danger")
-        processing_status = dbc.Badge(data.get("processing", "Unknown"), color="success" if data.get("processing") == "Normal" else "warning")
-
-        last_update = data.get("timestamp", "N/A")
-
-        stored_data = {'history': df.to_dict('records'), 'last_update': last_update}
-
-        return gauge_fig, composition_fig, trend_fig, threat_alert, gpu_status, processing_status, last_update, alerts_table, stored_data
-
+        response = requests.get("http://localhost:5000/api/live_traffic", timeout=1.5)
+        data = response.json()
     except Exception as e:
-        print("[ERROR] update_dashboard():", e)
-        return ({'data': [], 'layout': {}},) * 3 + [
-            dbc.Alert("Connection Error", color="danger"),
-            "Error", "Error", "N/A", html.Div("No data available"), {'history': [], 'last_update': 'N/A'}
-        ]
+        print("[ERROR] Could not fetch data from backend:", e)
+        return "-", "-", "stat-card-value", "-", {}, {}, html.Div("Connection error"), datetime.now().strftime('%H:%M:%S')
+
+    normal = data.get("normal", 0)
+    malicious = data.get("malicious", 0)
+    threat = data.get("threat_level", 0.0)
+    total = normal + malicious
+
+    traffic_history.append({
+        "timestamp": datetime.now(),
+        "normal": normal,
+        "malicious": malicious
+    })
+
+    # Update alerts
+    if threat > 0.3:
+        alert_msg = f"High threat detected: {malicious} malicious packets"
+        alert_history.appendleft({"timestamp": datetime.now(), "message": alert_msg})
+
+    df = pd.DataFrame(list(traffic_history))
+
+    # Trend Graph
+    trend_fig = go.Figure()
+    trend_fig.add_trace(go.Scatter(x=df['timestamp'], y=df['malicious'], name='Malicious', fill='tozeroy', line=dict(color='#E91E63')))
+    trend_fig.add_trace(go.Scatter(x=df['timestamp'], y=df['normal'], name='Normal', fill='tozeroy', line=dict(color='#00BCD4')))
+    trend_fig.update_layout(margin=dict(t=20, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=400)
+
+    # Pie Chart
+    pie_fig = go.Figure(data=[go.Pie(
+        labels=['Normal', 'Malicious'],
+        values=[normal, malicious],
+        marker_colors=['#00BCD4', '#E91E63'],
+        hole=0.5
+    )])
+    pie_fig.update_layout(margin=dict(t=0, b=0), height=200, paper_bgcolor='rgba(0,0,0,0)')
+
+    # Alerts Feed
+    alerts = html.Div([html.Div([
+        html.I(className="fas fa-exclamation-circle text-danger me-2"),
+        html.Span(alert['message'], className="me-2"),
+        html.Small(alert['timestamp'].strftime('%H:%M:%S'), className="text-muted")
+    ], className="d-flex justify-content-between") for alert in alert_history]) if alert_history else html.Div("No active alerts", className="text-muted")
+
+    return (
+        f"{total:,}",
+        f"{threat*100:.1f}%",
+        "stat-card-value threat" if threat > 0.3 else "stat-card-value",
+        str(len(alert_history)),
+        trend_fig,
+        pie_fig,
+        alerts,
+        datetime.now().strftime('%B %d, %Y • %H:%M:%S')
+    )
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8050, host="0.0.0.0")
+    app.run(debug=True, host='0.0.0.0', port=8050)
