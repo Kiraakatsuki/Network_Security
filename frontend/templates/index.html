@@ -8,6 +8,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Plotly.js for charting -->
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <!-- Showdown.js to convert Markdown to HTML -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/showdown/2.1.0/showdown.min.js"></script>
     <!-- Google Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -46,6 +48,21 @@
             background-color: #4b5563;
             border-radius: 10px;
             border: 2px solid #1f2937;
+        }
+        /* Modal styles */
+        .modal {
+            transition: opacity 0.25s ease;
+        }
+        .modal-content {
+            transition: transform 0.25s ease;
+        }
+        /* Spinner for loading state */
+        .spinner {
+            border-top-color: #3498db;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -103,11 +120,15 @@
         <!-- Middle Row: Traffic Trend -->
         <div class="grid grid-cols-1 gap-6 mb-6">
             <div class="card shadow-lg">
-                <div class="card-header p-4">
+                <div class="card-header p-4 flex justify-between items-center">
                     <h2 class="text-lg font-semibold">Traffic Trend (Last 5 Minutes)</h2>
+                     <button id="generate-summary-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">
+                        ✨ Generate Summary
+                    </button>
                 </div>
                 <div class="p-4">
                     <div id="traffic-trend" class="w-full h-80"></div>
+                     <div id="traffic-summary" class="mt-4 p-4 bg-gray-800 rounded-lg text-gray-300 hidden"></div>
                 </div>
             </div>
         </div>
@@ -124,42 +145,47 @@
             </div>
         </div>
     </div>
+    
+    <!-- AI Analysis Modal -->
+    <div id="ai-modal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50 pointer-events-none opacity-0">
+        <div class="modal-content card w-full max-w-2xl transform -translate-y-10">
+            <div class="card-header p-4 flex justify-between items-center">
+                <h2 class="text-lg font-semibold">✨ AI Threat Analysis</h2>
+                <button id="close-modal-btn" class="text-gray-300 hover:text-white">&times;</button>
+            </div>
+            <div id="modal-body" class="p-6 max-h-[70vh] overflow-y-auto">
+                <!-- AI content will be injected here -->
+            </div>
+        </div>
+    </div>
+
 
     <script>
         // --- Data Simulation and Storage ---
-        // This object replicates the behavior of the Python TrafficData class.
+        let latestAlerts = [];
         const trafficData = {
-            history: [], // Stores {timestamp, normal, malicious, threat_level}
-            
-            // Adds a new data point and cleans up old ones.
+            history: [], 
             update: function(normal, malicious, threat_level) {
                 const now = new Date();
                 this.history.push({
-                    timestamp: now,
-                    normal: normal,
-                    malicious: malicious,
-                    threat_level: threat_level
+                    timestamp: now.toISOString(),
+                    normal,
+                    malicious
                 });
-                
-                // Keep only the last 5 minutes of data
                 const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
-                this.history = this.history.filter(d => d.timestamp > fiveMinutesAgo);
+                this.history = this.history.filter(d => new Date(d.timestamp) > fiveMinutesAgo);
             }
         };
+        const showdownConverter = new showdown.Converter();
 
         // --- Main Dashboard Update Function ---
         function updateDashboard() {
             try {
-                // 1. Simulate new data (replicating the Python logic)
                 const normal = Math.floor(Math.random() * (200 - 50 + 1)) + 50;
                 const malicious = Math.floor(Math.random() * 51);
-                // Avoid division by zero
                 const threat_level = malicious / (normal + malicious + 0.001); 
-                
-                // 2. Update the data history
                 trafficData.update(normal, malicious, threat_level);
 
-                // 3. Update UI Components
                 updateGauge(threat_level);
                 updateThreatIndicator(threat_level);
                 updateCompositionPie(normal, malicious);
@@ -169,62 +195,38 @@
 
             } catch (e) {
                 console.error("Error updating dashboard:", e);
-                // In case of an error, display an alert
-                 const threatIndicator = document.getElementById('threat-indicator');
-                 threatIndicator.innerHTML = `
-                    <div class="bg-red-900 border border-red-400 text-red-100 px-4 py-3 rounded-lg" role="alert">
-                        <strong class="font-bold">Connection Error!</strong>
-                        <span class="block sm:inline">Could not update dashboard.</span>
-                    </div>`;
+                document.getElementById('threat-indicator').innerHTML = `<div class="bg-red-900 border border-red-400 text-red-100 px-4 py-3 rounded-lg" role="alert"><strong>Connection Error!</strong></div>`;
             }
         }
 
         // --- Chart and UI Element Update Functions ---
-
-        /**
-         * Updates the threat level gauge.
-         * @param {number} threat_level - A value between 0 and 1.
-         */
         function updateGauge(threat_level) {
-            const gaugeData = [{
+            Plotly.react('live-traffic-gauge', [{
                 type: 'indicator',
                 mode: 'gauge+number',
                 value: threat_level * 100,
                 number: { suffix: '%', font: {color: '#f9fafb'} },
                 gauge: {
                     axis: { range: [null, 100], tickwidth: 1, tickcolor: "darkblue" },
-                    bar: { color: "#4f46e5" }, // Indigo
+                    bar: { color: "#4f46e5" },
                     bgcolor: "rgba(255, 255, 255, 0.1)",
                     borderwidth: 2,
                     bordercolor: "#4b5563",
                     steps: [
-                        { range: [0, 30], color: '#10b981' }, // Emerald
-                        { range: [30, 70], color: '#f59e0b' }, // Amber
-                        { range: [70, 100], color: '#ef4444' }  // Red
-                    ],
-                    threshold: {
-                        line: { color: "#f9fafb", width: 4 },
-                        thickness: 0.75,
-                        value: threat_level * 100
-                    }
+                        { range: [0, 30], color: '#10b981' },
+                        { range: [30, 70], color: '#f59e0b' },
+                        { range: [70, 100], color: '#ef4444' }
+                    ]
                 }
-            }];
-
-            const layout = {
+            }], {
                 title: { text: 'Current Threat Level', font: { color: '#9ca3af' }},
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
                 margin: { t: 50, b: 30, l: 30, r: 30 },
                 height: 250
-            };
-            
-            Plotly.react('live-traffic-gauge', gaugeData, layout, {responsive: true});
+            }, {responsive: true});
         }
         
-        /**
-         * Updates the threat level indicator text/alert box.
-         * @param {number} threat_level - A value between 0 and 1.
-         */
         function updateThreatIndicator(threat_level) {
              const indicator = document.getElementById('threat-indicator');
              let alertHtml = '';
@@ -238,13 +240,8 @@
              indicator.innerHTML = alertHtml;
         }
 
-        /**
-         * Updates the traffic composition pie chart.
-         * @param {number} normal - Count of normal packets.
-         * @param {number} malicious - Count of malicious packets.
-         */
         function updateCompositionPie(normal, malicious) {
-            const compositionData = [{
+            Plotly.react('traffic-composition', [{
                 values: [normal, malicious],
                 labels: ['Normal', 'Malicious'],
                 type: 'pie',
@@ -253,112 +250,77 @@
                 textinfo: 'percent',
                 textfont: { size: 16, color: '#111827' },
                 hoverinfo: 'label+value'
-            }];
-
-            const layout = {
+            }], {
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
                 margin: { t: 10, b: 10, l: 10, r: 10 },
                 height: 300,
                 showlegend: true,
-                legend: {
-                    orientation: 'h',
-                    yanchor: 'bottom',
-                    y: -0.2,
-                    font: { color: '#d1d5db' }
-                }
-            };
-
-            Plotly.react('traffic-composition', compositionData, layout, {responsive: true});
+                legend: { orientation: 'h', yanchor: 'bottom', y: -0.2, font: { color: '#d1d5db' } }
+            }, {responsive: true});
         }
         
-        /**
-         * Updates the system status indicators (GPU, Processing, Last Update).
-         */
         function updateSystemStatus() {
-            // GPU status
             const gpuStatusEl = document.getElementById('gpu-status');
             const isGpuActive = Math.random() > 0.1;
             gpuStatusEl.textContent = isGpuActive ? "Active" : "Inactive";
             gpuStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${isGpuActive ? 'bg-green-500 text-green-900' : 'bg-red-500 text-red-900'}`;
-
-            // Processing status
             const processingStatusEl = document.getElementById('processing-status');
             const isProcessingNormal = Math.random() > 0.1;
             processingStatusEl.textContent = isProcessingNormal ? "Normal" : "Delayed";
             processingStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${isProcessingNormal ? 'bg-green-500 text-green-900' : 'bg-yellow-500 text-yellow-900'}`;
-
-            // Last update time
             document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
         }
 
-        /**
-         * Updates the main traffic trend line chart.
-         */
         function updateTrendChart() {
             const history = trafficData.history;
-            const timestamps = history.map(d => d.timestamp);
+            const timestamps = history.map(d => new Date(d.timestamp));
             const normalTraffic = history.map(d => d.normal);
             const maliciousTraffic = history.map(d => d.malicious);
-
-            const trendData = [
-                {
-                    x: timestamps,
-                    y: normalTraffic,
-                    name: 'Normal Traffic',
-                    mode: 'lines',
-                    line: { color: '#10b981', width: 2 }
-                },
-                {
-                    x: timestamps,
-                    y: maliciousTraffic,
-                    name: 'Malicious Traffic',
-                    mode: 'lines',
-                    line: { color: '#ef4444', width: 2 }
-                }
-            ];
-
-            const layout = {
+            Plotly.react('traffic-trend', [
+                { x: timestamps, y: normalTraffic, name: 'Normal Traffic', mode: 'lines', line: { color: '#10b981', width: 2 } },
+                { x: timestamps, y: maliciousTraffic, name: 'Malicious Traffic', mode: 'lines', line: { color: '#ef4444', width: 2 } }
+            ], {
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
                 margin: { t: 30, b: 50, l: 60, r: 30 },
                 height: 320,
-                xaxis: { 
-                    title: 'Time',
-                    color: '#9ca3af',
-                    gridcolor: 'rgba(255, 255, 255, 0.1)'
-                },
-                yaxis: { 
-                    title: 'Packets per second',
-                    color: '#9ca3af',
-                    gridcolor: 'rgba(255, 255, 255, 0.1)'
-                },
+                xaxis: { title: 'Time', color: '#9ca3af', gridcolor: 'rgba(255, 255, 255, 0.1)' },
+                yaxis: { title: 'Packets per second', color: '#9ca3af', gridcolor: 'rgba(255, 255, 255, 0.1)' },
                 hovermode: 'x unified',
-                legend: {
-                    orientation: 'h',
-                    yanchor: 'bottom',
-                    y: 1.02,
-                    xanchor: 'right',
-                    x: 1,
-                    font: { color: '#d1d5db' }
-                }
-            };
-            
-            Plotly.react('traffic-trend', trendData, layout, {responsive: true});
+                legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'right', x: 1, font: { color: '#d1d5db' } }
+            }, {responsive: true});
         }
         
-        /**
-         * Generates and displays the table of recent security alerts.
-         */
         function updateAlertsTable() {
             const threats = ['DDoS', 'Port Scan', 'Malware', 'Brute Force', 'SQL Injection'];
-            const severities = {
-                High: 'bg-red-500 text-red-100',
-                Medium: 'bg-yellow-500 text-yellow-100',
-                Low: 'bg-green-500 text-green-100'
-            };
-            
-            let tableHtml = `
+            const severities = { High: 'bg-red-500 text-red-100', Medium: 'bg-yellow-500 text-yellow-100', Low: 'bg-green-500 text-green-100' };
+            latestAlerts = []; // Clear and regenerate alerts
+            let tableHtml = `<table class="w-full text-sm text-left text-gray-400">...</table>`; // Header is static
+            let tableBodyHtml = '';
+            for (let i = 0; i < 5; i++) {
+                const alert = {
+                    time: new Date(new Date().getTime() - i * 10000 * Math.random()).toLocaleTimeString(),
+                    source: `192.168.1.${Math.floor(Math.random() * 50) + 1}`,
+                    destination: `10.0.0.${Math.floor(Math.random() * 10) + 1}`,
+                    threat: threats[Math.floor(Math.random() * threats.length)],
+                    severity: Object.keys(severities)[Math.floor(Math.random() * 3)]
+                };
+                latestAlerts.push(alert);
+                const severityClass = severities[alert.severity];
+                tableBodyHtml += `
+                    <tr class="border-b border-gray-700 hover:bg-gray-600/50">
+                        <td class="px-6 py-4 font-mono">${alert.time}</td>
+                        <td class="px-6 py-4 font-mono">${alert.source}</td>
+                        <td class="px-6 py-4 font-mono">${alert.destination}</td>
+                        <td class="px-6 py-4">${alert.threat}</td>
+                        <td class="px-6 py-4"><span class="px-2 py-1 font-semibold text-xs rounded-md ${severityClass}">${alert.severity}</span></td>
+                        <td class="px-6 py-4 text-right">
+                           <button class="analyze-btn bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded text-xs" data-alert-index="${i}">✨ Analyze</button>
+                        </td>
+                    </tr>`;
+            }
+            const tableHeader = `
                 <table class="w-full text-sm text-left text-gray-400">
                     <thead class="text-xs text-gray-300 uppercase bg-gray-700/50">
                         <tr>
@@ -367,56 +329,123 @@
                             <th scope="col" class="px-6 py-3">Destination IP</th>
                             <th scope="col" class="px-6 py-3">Threat Type</th>
                             <th scope="col" class="px-6 py-3">Severity</th>
+                            <th scope="col" class="px-6 py-3 text-right">Action</th>
                         </tr>
                     </thead>
-                    <tbody>
-            `;
+                    <tbody>${tableBodyHtml}</tbody>
+                </table>`;
+            document.getElementById('alerts-table-container').innerHTML = tableHeader;
+        }
+        
+        // --- Gemini API Functions ---
+        const getLoadingSpinner = () => `<div class="flex justify-center items-center h-48"><div class="spinner w-12 h-12 rounded-full border-4 border-gray-600"></div></div>`;
+        
+        async function callGemini(prompt) {
+             const apiKey = ""; // Leave empty, will be handled by the environment
+             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+             const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
 
-            for (let i = 0; i < 5; i++) {
-                const now = new Date();
-                const alertTime = new Date(now.getTime() - i * 10000 * Math.random());
-                const sourceIp = `192.168.1.${Math.floor(Math.random() * 50) + 1}`;
-                const destIp = `10.0.0.${Math.floor(Math.random() * 10) + 1}`;
-                const threat = threats[Math.floor(Math.random() * threats.length)];
-                const severity = Object.keys(severities)[Math.floor(Math.random() * 3)];
-                const severityClass = severities[severity];
-                
-                tableHtml += `
-                    <tr class="border-b border-gray-700 hover:bg-gray-600/50">
-                        <td class="px-6 py-4 font-mono">${alertTime.toLocaleTimeString()}</td>
-                        <td class="px-6 py-4 font-mono">${sourceIp}</td>
-                        <td class="px-6 py-4 font-mono">${destIp}</td>
-                        <td class="px-6 py-4">${threat}</td>
-                        <td class="px-6 py-4">
-                            <span class="px-2 py-1 font-semibold text-xs rounded-md ${severityClass}">
-                                ${severity}
-                            </span>
-                        </td>
-                    </tr>
-                `;
-            }
-
-            tableHtml += `</tbody></table>`;
-            document.getElementById('alerts-table-container').innerHTML = tableHtml;
+             try {
+                 const response = await fetch(apiUrl, {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify(payload)
+                 });
+                 if (!response.ok) {
+                    throw new Error(`API call failed with status: ${response.status}`);
+                 }
+                 const result = await response.json();
+                 if (result.candidates && result.candidates.length > 0) {
+                     return result.candidates[0].content.parts[0].text;
+                 }
+                 return "No response from AI. The security model may have blocked the request.";
+             } catch (error) {
+                 console.error("Gemini API call error:", error);
+                 return `Error: Could not retrieve analysis. ${error.message}`;
+             }
         }
 
-        // --- Initial Load and Interval Setup ---
+        async function analyzeThreat(alertData) {
+            const modalBody = document.getElementById('modal-body');
+            openModal();
+            modalBody.innerHTML = getLoadingSpinner();
+            
+            const prompt = `You are a senior cybersecurity analyst. A security alert has been triggered on our network. Here are the details:
+- Threat Type: ${alertData.threat}
+- Source IP: ${alertData.source}
+- Destination IP: ${alertData.destination}
+- Severity: ${alertData.severity}
+
+Please provide a concise analysis in three parts using Markdown formatting:
+### Threat Explanation
+Briefly explain what this threat is in simple, clear terms.
+### Immediate Actions
+Recommend 3-4 immediate, actionable steps a network administrator should take to mitigate this threat as a numbered list.
+### Potential Cause & Context
+Briefly describe what might have caused this alert and any relevant context.`;
+
+            const analysisText = await callGemini(prompt);
+            modalBody.innerHTML = showdownConverter.makeHtml(analysisText);
+            // Apply styling to generated HTML
+            modalBody.querySelectorAll('h3').forEach(h3 => h3.classList.add('text-xl', 'font-bold', 'text-cyan-400', 'mt-4', 'mb-2'));
+            modalBody.querySelectorAll('ul, ol').forEach(list => list.classList.add('list-disc', 'list-inside', 'pl-4', 'space-y-1'));
+        }
+
+        async function generateTrafficSummary() {
+            const summaryDiv = document.getElementById('traffic-summary');
+            const summaryBtn = document.getElementById('generate-summary-btn');
+            summaryDiv.innerHTML = getLoadingSpinner();
+            summaryDiv.classList.remove('hidden');
+            summaryBtn.disabled = true;
+            summaryBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            const prompt = `You are a network traffic analyst. Below is a time-series dataset of network traffic over the last few minutes, showing counts of normal and malicious packets.
+Data: ${JSON.stringify(trafficData.history.slice(-30))}
+
+Please provide a brief, one-paragraph summary of the traffic trend. Highlight any significant spikes in malicious traffic, mention the overall trend (e.g., stable, increasing, erratic), and conclude with a potential implication.`;
+
+            const summaryText = await callGemini(prompt);
+            summaryDiv.innerHTML = summaryText;
+            summaryBtn.disabled = false;
+            summaryBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+
+        // --- Modal Handling ---
+        const modal = document.getElementById('ai-modal');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+        const openModal = () => {
+            modal.classList.remove('pointer-events-none', 'opacity-0');
+            modal.querySelector('.modal-content').classList.remove('-translate-y-10');
+        };
+        const closeModal = () => {
+            modal.classList.add('pointer-events-none', 'opacity-0');
+            modal.querySelector('.modal-content').classList.add('-translate-y-10');
+        };
+        closeModalBtn.addEventListener('click', closeModal);
+
+        // --- Event Listeners ---
+        document.getElementById('alerts-table-container').addEventListener('click', function(e) {
+            if (e.target && e.target.classList.contains('analyze-btn')) {
+                const alertIndex = e.target.getAttribute('data-alert-index');
+                const alertData = latestAlerts[alertIndex];
+                if(alertData) {
+                    analyzeThreat(alertData);
+                }
+            }
+        });
+
+        document.getElementById('generate-summary-btn').addEventListener('click', generateTrafficSummary);
         
-        // Run the update function once on page load.
+        // --- Initial Load and Interval Setup ---
         window.onload = function() {
             updateDashboard();
+            setInterval(updateDashboard, 5000); // Update every 5 seconds to reduce visual noise
         };
-
-        // Set the interval to update the dashboard every 2 seconds.
-        setInterval(updateDashboard, 2000);
-
-        // Make charts responsive to window resizing
         window.onresize = function() {
             Plotly.Plots.resize('live-traffic-gauge');
             Plotly.Plots.resize('traffic-composition');
             Plotly.Plots.resize('traffic-trend');
         };
-
     </script>
 </body>
 </html>
