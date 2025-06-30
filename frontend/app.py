@@ -1,24 +1,56 @@
-from flask import Flask, render_template
-import dash
-import dash_core_components as dcc
-import dash_html_components as html
+from flask import Flask, jsonify
+import redis
+import json
+from datetime import datetime
 
 app = Flask(__name__)
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-# Initialize Dash
-dash_app = dash.Dash(__name__, server=app, url_base_pathname='/dashboard/')
+@app.route("/api/live_traffic")
+def live_traffic():
+    try:
+        raw = redis_client.get('live_traffic')
+        if raw is None:
+            raise ValueError("No live data in Redis.")
+        
+        data = json.loads(raw)
+        print("[DEBUG] Served live_traffic data:", data)
 
-dash_app.layout = html.Div([
-    dcc.Graph(
-        id='live-update-graph',
-        figure={'data': []}  # Placeholder for dynamic data
-    ),
-    html.H3('Real-Time Traffic Detection'),
-])
+        # Ensure expected fields
+        normal = int(data.get("normal", 0))
+        malicious = int(data.get("malicious", 0))
+        total = normal + malicious
+        threat_level = malicious / (total + 0.001)
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+        return jsonify({
+            "normal": normal,
+            "malicious": malicious,
+            "threat_level": threat_level,
+            "timestamp": data.get("timestamp", datetime.now().isoformat()),
+            "gpu": data.get("gpu", "Active"),
+            "processing": data.get("processing", "Normal"),
+            "top_ports": data.get("top_ports", {}),
+            "flag_distribution": data.get("flag_distribution", {}),
+            "src_port": data.get("src_port", 0),
+            "dst_port": data.get("dst_port", 0),
+            "flags": data.get("flags", "UNK")
+        })
+
+    except Exception as e:
+        print(f"[ERROR] /api/live_traffic: {e}")
+        return jsonify({
+            "normal": 0,
+            "malicious": 0,
+            "threat_level": 1.0,
+            "timestamp": datetime.now().isoformat(),
+            "gpu": "Inactive",
+            "processing": "Error",
+            "top_ports": {},
+            "flag_distribution": {},
+            "src_port": 0,
+            "dst_port": 0,
+            "flags": "ERR"
+        })
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, port=5000)

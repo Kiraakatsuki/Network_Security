@@ -1,57 +1,130 @@
+# === real_time_detection.py with debug and Redis health fix ===
 import joblib
 import pyshark
 import pandas as pd
+import redis
+import json
+from datetime import datetime
+import socket
+import numpy as np
+from collections import defaultdict
 
-# Load the trained model and scaler
-model_path = 'backend/model/traffic_classifier_model.pkl'
-scaler_path = 'backend/model/scaler.pkl'
+# Load pipeline and expected features
+try:
+    model = joblib.load('backend/model/traffic_classifier_model.pkl')
+    expected_features = joblib.load('backend/model/expected_features.pkl')
+except Exception as e:
+    raise SystemExit(f"Failed to load model or features: {e}")
 
-model = joblib.load(model_path)
-scaler = joblib.load(scaler_path)
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-# Convert IP address to an integer (simplified method)
+PROTOCOL_MAP = {'TCP': 0, 'UDP': 1, 'ICMP': 2, 'OTHER': 3}
+port_stats = defaultdict(int)
+flag_stats = defaultdict(int)
+
 def ip_to_int(ip):
-    parts = ip.split('.')
-    return int(parts[0]) * 256**3 + int(parts[1]) * 256**2 + int(parts[2]) * 256 + int(parts[3])
+    try:
+        return int(socket.inet_aton(ip).hex(), 16)
+    except:
+        return 0
 
-# Function to capture and process traffic
-def capture_and_detect():
-    capture = pyshark.LiveCapture(interface='eth0')  # Adjust interface as needed
+def categorize_port(port):
+    if port <= 1023:
+        return 'well_known'
+    elif 1024 <= port <= 49151:
+        return 'registered'
+    else:
+        return 'dynamic'
+
+def extract_features(packet):
+    features = defaultdict(lambda: 0)
+    try:
+        if hasattr(packet, 'ip'):
+            features['src_ip'] = ip_to_int(packet.ip.src)
+            features['dst_ip'] = ip_to_int(packet.ip.dst)
+            features['length'] = int(getattr(packet, 'length', 0))
+            features['protocol'] = getattr(packet, 'transport_layer', 'OTHER')
+
+            if hasattr(packet, 'tcp'):
+                features['src_port'] = int(getattr(packet.tcp, 'srcport', 0))
+                features['dst_port'] = int(getattr(packet.tcp, 'dstport', 0))
+                features['flags'] = getattr(packet.tcp, 'flags', 'UNK')
+            elif hasattr(packet, 'udp'):
+                features['src_port'] = int(getattr(packet.udp, 'srcport', 0))
+                features['dst_port'] = int(getattr(packet.udp, 'dstport', 0))
+                features['flags'] = 'NONE'
+
+            features['src_port_category'] = categorize_port(features['src_port'])
+            features['dst_port_category'] = categorize_port(features['dst_port'])
+
+            port_stats[features['dst_port']] += 1
+            flag_stats[features['flags']] += 1
+    except Exception as e:
+        print(f"Feature extraction error: {e}")
+    return dict(features)
+
+def process_batch(batch):
+    df = pd.DataFrame(batch).fillna(0)
+
+    # Enforce correct data types
+    for col in ['src_ip', 'dst_ip', 'length', 'src_port', 'dst_port']:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+    for col in ['protocol', 'flags', 'dst_port_category', 'src_port_category']:
+        df[col] = df[col].astype(str).fillna('UNKNOWN')
+
+    try:
+        X = df[expected_features]
+        preds = model.predict(X)
+    except Exception as e:
+        print(f"Inference error: {e}")
+        return
+
+    last = batch[-1]
+    output = {
+        "normal": int(np.sum(preds == 0)),
+        "malicious": int(np.sum(preds == 1)),
+        "normal_percent": float(np.mean(preds == 0) * 100),
+        "malicious_percent": float(np.mean(preds == 1) * 100),
+        "timestamp": datetime.now().isoformat(),
+        "sample_size": len(preds),
+        "src_port": last.get('src_port', 0),
+        "dst_port": last.get('dst_port', 0),
+        "flags": last.get('flags', 'UNK'),
+        "gpu": "Active",
+        "processing": "Normal",
+        "top_ports": dict(sorted(port_stats.items(), key=lambda x: x[1], reverse=True)[:10]),
+        "flag_distribution": dict(flag_stats)
+    }
+
+    print("[INFO] Processed Batch:", output)
+
+    try:
+        pipe = redis_client.pipeline()
+        pipe.set('live_traffic', json.dumps(output))
+        pipe.set('port_statistics', json.dumps(output['top_ports']))
+        pipe.set('flag_statistics', json.dumps(output['flag_distribution']))
+        pipe.publish('traffic_updates', json.dumps(output))
+        pipe.execute()
+    except Exception as e:
+        print(f"Redis error: {e}")
+
+def capture_and_publish(interface='eth0', batch_size=2):
+    print(f"[INFO] Starting packet capture on '{interface}' (batch size = {batch_size})")
+    capture = pyshark.LiveCapture(interface=interface)
+    batch = []
     for packet in capture.sniff_continuously():
-        if hasattr(packet, 'ip'):  # Check if the packet has an IP layer
-            try:
-                # Extract features from the packet
-                features = {
-                    'src_ip': ip_to_int(packet.ip.src),
-                    'dst_ip': ip_to_int(packet.ip.dst),
-                    'protocol': packet.transport_layer,
-                    'length': len(packet)
-                }
+        feat = extract_features(packet)
+        print(f"[DEBUG] Extracted: {feat}")
+        if feat:
+            batch.append(feat)
+        if len(batch) >= batch_size:
+            print("[INFO] Processing batch...")
+            process_batch(batch)
+            batch = []
 
-                # Convert features to a DataFrame (for compatibility with model input)
-                df = pd.DataFrame([features])
-
-                # Convert 'protocol' to numerical (same as during training)
-                df['protocol'] = pd.factorize(df['protocol'])[0]
-
-                # Standardize the features using the loaded scaler
-                X_scaled = scaler.transform(df)
-
-                # Make prediction using the trained model
-                prediction = model.predict(X_scaled)
-
-                # Print the prediction result
-                if prediction == 1:
-                    print(f"Malicious traffic detected: {packet}")
-                else:
-                    print(f"Normal traffic detected: {packet}")
-
-            except AttributeError as e:
-                # Handle packets that do not have the expected IP or transport layer
-                print(f"Error processing packet: {e}")
-        else:
-            print(f"Non-IP packet detected: {packet}")
-
-# Start the detection
 if __name__ == "__main__":
-    capture_and_detect()
+    try:
+        capture_and_publish()
+    except KeyboardInterrupt:
+        print("[INFO] Capture stopped")

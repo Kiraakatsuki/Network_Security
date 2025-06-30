@@ -18,16 +18,16 @@
         /* Custom styles */
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #111827; /* Dark Gray */
-            color: #f9fafb; /* Light Gray */
+            background-color: #111827;
+            color: #f9fafb;
         }
         .card {
-            background-color: #1f2937; /* Darker Gray */
+            background-color: #1f2937;
             border: 1px solid #374151;
             border-radius: 0.75rem;
         }
         .card-header {
-            background-color: #374151; /* Medium Gray */
+            background-color: #374151;
             border-bottom: 1px solid #4b5563;
         }
         .plotly .grid {
@@ -37,7 +37,7 @@
             max-height: 300px;
             overflow-y: auto;
         }
-        /* Custom scrollbar for webkit browsers */
+        /* Custom scrollbar */
         .table-responsive::-webkit-scrollbar {
             width: 8px;
         }
@@ -56,7 +56,7 @@
         .modal-content {
             transition: transform 0.25s ease;
         }
-        /* Spinner for loading state */
+        /* Spinner */
         .spinner {
             border-top-color: #3498db;
             animation: spin 1s linear infinite;
@@ -64,6 +64,26 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        /* Port visualization */
+        .port-badge {
+            font-family: monospace;
+            background-color: #374151;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.85rem;
+        }
+        /* Flag visualization */
+        .flag-badge {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .flag-ack { background-color: #10b981; }
+        .flag-syn { background-color: #f59e0b; }
+        .flag-fin { background-color: #ef4444; }
+        .flag-rst { background-color: #8b5cf6; }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -95,40 +115,49 @@
                 </div>
             </div>
 
-            <!-- System Status -->
+            <!-- Port Activity -->
             <div class="card shadow-lg col-span-1">
                 <div class="card-header p-4">
-                    <h2 class="text-lg font-semibold">System Status</h2>
+                    <h2 class="text-lg font-semibold">Port Activity</h2>
                 </div>
-                <div class="p-4 space-y-4 text-lg h-[300px] flex flex-col justify-center">
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-300">GPU Acceleration:</span>
-                        <span id="gpu-status" class="px-3 py-1 text-sm font-medium rounded-full"></span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-300">Packet Processing:</span>
-                        <span id="processing-status" class="px-3 py-1 text-sm font-medium rounded-full"></span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-300">Last Update:</span>
-                        <span id="last-update" class="text-gray-400 font-mono"></span>
-                    </div>
+                <div class="p-4">
+                    <div id="port-activity" class="w-full h-[300px]"></div>
                 </div>
             </div>
         </div>
 
-        <!-- Middle Row: Traffic Trend -->
-        <div class="grid grid-cols-1 gap-6 mb-6">
-            <div class="card shadow-lg">
+        <!-- Middle Row: Traffic Trend and Flags -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <!-- Traffic Trend -->
+            <div class="card shadow-lg col-span-1">
                 <div class="card-header p-4 flex justify-between items-center">
                     <h2 class="text-lg font-semibold">Traffic Trend (Last 5 Minutes)</h2>
-                     <button id="generate-summary-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">
+                    <button id="generate-summary-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">
                         ✨ Generate Summary
                     </button>
                 </div>
                 <div class="p-4">
                     <div id="traffic-trend" class="w-full h-80"></div>
-                     <div id="traffic-summary" class="mt-4 p-4 bg-gray-800 rounded-lg text-gray-300 hidden"></div>
+                    <div id="traffic-summary" class="mt-4 p-4 bg-gray-800 rounded-lg text-gray-300 hidden"></div>
+                </div>
+            </div>
+
+            <!-- TCP Flags Analysis -->
+            <div class="card shadow-lg col-span-1">
+                <div class="card-header p-4">
+                    <h2 class="text-lg font-semibold">TCP Flags Analysis</h2>
+                </div>
+                <div class="p-4">
+                    <div id="flags-analysis" class="w-full h-80"></div>
+                    <div class="mt-4 text-sm text-gray-400">
+                        <h3 class="font-medium mb-2">Common Flag Combinations:</h3>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="flex items-center"><span class="flag-badge flag-syn"></span> SYN - Connection initiation</div>
+                            <div class="flex items-center"><span class="flag-badge flag-ack"></span> ACK - Acknowledgment</div>
+                            <div class="flex items-center"><span class="flag-badge flag-fin"></span> FIN - Connection termination</div>
+                            <div class="flex items-center"><span class="flag-badge flag-rst"></span> RST - Reset connection</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -159,19 +188,35 @@
         </div>
     </div>
 
-
     <script>
-        // --- Data Simulation and Storage ---
+        // --- Data Storage ---
         let latestAlerts = [];
         const trafficData = {
-            history: [], 
-            update: function(normal, malicious, threat_level) {
+            history: [],
+            portActivity: {},
+            tcpFlags: {},
+            update: function(data) {
                 const now = new Date();
                 this.history.push({
                     timestamp: now.toISOString(),
-                    normal,
-                    malicious
+                    normal: data.normal,
+                    malicious: data.malicious,
+                    src_port: data.src_port,
+                    dst_port: data.dst_port,
+                    flags: data.flags
                 });
+                
+                // Update port activity
+                if (data.dst_port) {
+                    this.portActivity[data.dst_port] = (this.portActivity[data.dst_port] || 0) + 1;
+                }
+                
+                // Update TCP flags
+                if (data.flags) {
+                    this.tcpFlags[data.flags] = (this.tcpFlags[data.flags] || 0) + 1;
+                }
+                
+                // Keep only last 5 minutes of data
                 const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
                 this.history = this.history.filter(d => new Date(d.timestamp) > fiveMinutesAgo);
             }
@@ -180,26 +225,29 @@
 
         // --- Main Dashboard Update Function ---
         function updateDashboard() {
-            try {
-                const normal = Math.floor(Math.random() * (200 - 50 + 1)) + 50;
-                const malicious = Math.floor(Math.random() * 51);
-                const threat_level = malicious / (normal + malicious + 0.001); 
-                trafficData.update(normal, malicious, threat_level);
-
-                updateGauge(threat_level);
-                updateThreatIndicator(threat_level);
-                updateCompositionPie(normal, malicious);
-                updateSystemStatus();
-                updateTrendChart();
-                updateAlertsTable();
-
-            } catch (e) {
-                console.error("Error updating dashboard:", e);
-                document.getElementById('threat-indicator').innerHTML = `<div class="bg-red-900 border border-red-400 text-red-100 px-4 py-3 rounded-lg" role="alert"><strong>Connection Error!</strong></div>`;
-            }
+            fetch("/api/live_traffic")
+                .then(response => response.json())
+                .then(data => {
+                    trafficData.update(data);
+                    updateGauge(data.threat_level);
+                    updateThreatIndicator(data.threat_level);
+                    updateCompositionPie(data.normal, data.malicious);
+                    updatePortActivityChart();
+                    updateFlagsAnalysisChart();
+                    updateSystemStatus(data.gpu, data.processing, data.timestamp);
+                    updateTrendChart();
+                    updateAlertsTable();
+                })
+                .catch(err => {
+                    console.error("API fetch error:", err);
+                    document.getElementById('threat-indicator').innerHTML = 
+                        `<div class="bg-red-900 border border-red-400 text-red-100 px-4 py-3 rounded-lg" role="alert">
+                            <strong>Connection Error!</strong>
+                        </div>`;
+                });
         }
 
-        // --- Chart and UI Element Update Functions ---
+        // --- Chart Update Functions ---
         function updateGauge(threat_level) {
             Plotly.react('live-traffic-gauge', [{
                 type: 'indicator',
@@ -260,16 +308,72 @@
             }, {responsive: true});
         }
         
-        function updateSystemStatus() {
+        function updatePortActivityChart() {
+            const portData = Object.entries(trafficData.portActivity)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
+            
+            Plotly.react('port-activity', [{
+                type: 'bar',
+                x: portData.map(d => d[0]),
+                y: portData.map(d => d[1]),
+                marker: { color: '#4f46e5' },
+                text: portData.map(d => `Port ${d[0]}`),
+                hoverinfo: 'y+text'
+            }], {
+                title: { text: 'Top Destination Ports', font: { color: '#9ca3af' }},
+                xaxis: { title: 'Port Number', color: '#9ca3af' },
+                yaxis: { title: 'Packet Count', color: '#9ca3af', gridcolor: 'rgba(255, 255, 255, 0.1)' },
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: { t: 40, b: 60, l: 60, r: 30 },
+                height: 300
+            }, {responsive: true});
+        }
+        
+        function updateFlagsAnalysisChart() {
+            const flagData = Object.entries(trafficData.tcpFlags)
+                .sort((a, b) => b[1] - a[1]);
+                
+            const flagColors = {
+                'ACK': '#10b981',
+                'SYN': '#f59e0b',
+                'FIN': '#ef4444',
+                'RST': '#8b5cf6',
+                'PSH': '#ec4899',
+                'URG': '#6366f1'
+            };
+            
+            Plotly.react('flags-analysis', [{
+                type: 'bar',
+                x: flagData.map(d => d[0]),
+                y: flagData.map(d => d[1]),
+                marker: { 
+                    color: flagData.map(d => flagColors[d[0]] || '#6b7280')
+                },
+                text: flagData.map(d => `${d[0]} (${d[1]})`),
+                hoverinfo: 'y+text'
+            }], {
+                title: { text: 'TCP Flag Distribution', font: { color: '#9ca3af' }},
+                xaxis: { title: 'Flag Type', color: '#9ca3af' },
+                yaxis: { title: 'Count', color: '#9ca3af', gridcolor: 'rgba(255, 255, 255, 0.1)' },
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: { t: 40, b: 60, l: 60, r: 30 },
+                height: 320
+            }, {responsive: true});
+        }
+
+        function updateSystemStatus(gpuStatus, processingStatus, timestamp) {
             const gpuStatusEl = document.getElementById('gpu-status');
-            const isGpuActive = Math.random() > 0.1;
-            gpuStatusEl.textContent = isGpuActive ? "Active" : "Inactive";
-            gpuStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${isGpuActive ? 'bg-green-500 text-green-900' : 'bg-red-500 text-red-900'}`;
+            gpuStatusEl.textContent = gpuStatus;
+            gpuStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${gpuStatus === 'Active' ? 'bg-green-500 text-green-900' : 'bg-red-500 text-red-900'}`;
+
             const processingStatusEl = document.getElementById('processing-status');
-            const isProcessingNormal = Math.random() > 0.1;
-            processingStatusEl.textContent = isProcessingNormal ? "Normal" : "Delayed";
-            processingStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${isProcessingNormal ? 'bg-green-500 text-green-900' : 'bg-yellow-500 text-yellow-900'}`;
-            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            processingStatusEl.textContent = processingStatus;
+            processingStatusEl.className = `px-3 py-1 text-sm font-medium rounded-full ${processingStatus === 'Normal' ? 'bg-green-500 text-green-900' : 'bg-yellow-500 text-yellow-900'}`;
+
+            document.getElementById('last-update').textContent = timestamp;
         }
 
         function updateTrendChart() {
@@ -277,6 +381,7 @@
             const timestamps = history.map(d => new Date(d.timestamp));
             const normalTraffic = history.map(d => d.normal);
             const maliciousTraffic = history.map(d => d.malicious);
+            
             Plotly.react('traffic-trend', [
                 { x: timestamps, y: normalTraffic, name: 'Normal Traffic', mode: 'lines', line: { color: '#10b981', width: 2 } },
                 { x: timestamps, y: maliciousTraffic, name: 'Malicious Traffic', mode: 'lines', line: { color: '#ef4444', width: 2 } }
@@ -295,39 +400,61 @@
         function updateAlertsTable() {
             const threats = ['DDoS', 'Port Scan', 'Malware', 'Brute Force', 'SQL Injection'];
             const severities = { High: 'bg-red-500 text-red-100', Medium: 'bg-yellow-500 text-yellow-100', Low: 'bg-green-500 text-green-100' };
-            latestAlerts = []; // Clear and regenerate alerts
-            let tableHtml = `<table class="w-full text-sm text-left text-gray-400">...</table>`; // Header is static
-            let tableBodyHtml = '';
-            for (let i = 0; i < 5; i++) {
-                const alert = {
+            
+            // Generate sample alerts with port and flag information
+            latestAlerts = Array.from({length: 5}, (_, i) => {
+                const ports = [80, 443, 22, 3389, 53, 3306];
+                const flags = ['SYN', 'ACK', 'FIN', 'RST', 'PSH', 'URG'];
+                const flagCombinations = ['SYN', 'SYN-ACK', 'ACK', 'FIN-ACK', 'RST-ACK'];
+                
+                return {
                     time: new Date(new Date().getTime() - i * 10000 * Math.random()).toLocaleTimeString(),
                     source: `192.168.1.${Math.floor(Math.random() * 50) + 1}`,
                     destination: `10.0.0.${Math.floor(Math.random() * 10) + 1}`,
+                    src_port: Math.floor(Math.random() * 60000) + 1024,
+                    dst_port: ports[Math.floor(Math.random() * ports.length)],
+                    flags: flagCombinations[Math.floor(Math.random() * flagCombinations.length)],
                     threat: threats[Math.floor(Math.random() * threats.length)],
                     severity: Object.keys(severities)[Math.floor(Math.random() * 3)]
                 };
-                latestAlerts.push(alert);
+            });
+
+            let tableBodyHtml = latestAlerts.map((alert, i) => {
                 const severityClass = severities[alert.severity];
-                tableBodyHtml += `
+                const flagBadges = alert.flags.split('-').map(flag => 
+                    `<span class="flag-badge flag-${flag.toLowerCase()}"></span>`
+                ).join('');
+                
+                return `
                     <tr class="border-b border-gray-700 hover:bg-gray-600/50">
                         <td class="px-6 py-4 font-mono">${alert.time}</td>
-                        <td class="px-6 py-4 font-mono">${alert.source}</td>
-                        <td class="px-6 py-4 font-mono">${alert.destination}</td>
-                        <td class="px-6 py-4">${alert.threat}</td>
+                        <td class="px-6 py-4">
+                            <div>${alert.source}</div>
+                            <div class="text-xs text-gray-400">Port: <span class="port-badge">${alert.src_port}</span></div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div>${alert.destination}</div>
+                            <div class="text-xs text-gray-400">Port: <span class="port-badge">${alert.dst_port}</span></div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div>${alert.threat}</div>
+                            <div class="flex items-center text-xs text-gray-400 mt-1">${flagBadges} ${alert.flags}</div>
+                        </td>
                         <td class="px-6 py-4"><span class="px-2 py-1 font-semibold text-xs rounded-md ${severityClass}">${alert.severity}</span></td>
                         <td class="px-6 py-4 text-right">
                            <button class="analyze-btn bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded text-xs" data-alert-index="${i}">✨ Analyze</button>
                         </td>
                     </tr>`;
-            }
+            }).join('');
+
             const tableHeader = `
                 <table class="w-full text-sm text-left text-gray-400">
                     <thead class="text-xs text-gray-300 uppercase bg-gray-700/50">
                         <tr>
                             <th scope="col" class="px-6 py-3">Time</th>
-                            <th scope="col" class="px-6 py-3">Source IP</th>
-                            <th scope="col" class="px-6 py-3">Destination IP</th>
-                            <th scope="col" class="px-6 py-3">Threat Type</th>
+                            <th scope="col" class="px-6 py-3">Source</th>
+                            <th scope="col" class="px-6 py-3">Destination</th>
+                            <th scope="col" class="px-6 py-3">Threat</th>
                             <th scope="col" class="px-6 py-3">Severity</th>
                             <th scope="col" class="px-6 py-3 text-right">Action</th>
                         </tr>
@@ -337,58 +464,60 @@
             document.getElementById('alerts-table-container').innerHTML = tableHeader;
         }
         
-        // --- Gemini API Functions ---
+        // --- AI Analysis Functions ---
         const getLoadingSpinner = () => `<div class="flex justify-center items-center h-48"><div class="spinner w-12 h-12 rounded-full border-4 border-gray-600"></div></div>`;
         
-        async function callGemini(prompt) {
-             const apiKey = ""; // Leave empty, will be handled by the environment
-             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-             const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
-
-             try {
-                 const response = await fetch(apiUrl, {
-                     method: 'POST',
-                     headers: { 'Content-Type': 'application/json' },
-                     body: JSON.stringify(payload)
-                 });
-                 if (!response.ok) {
-                    throw new Error(`API call failed with status: ${response.status}`);
-                 }
-                 const result = await response.json();
-                 if (result.candidates && result.candidates.length > 0) {
-                     return result.candidates[0].content.parts[0].text;
-                 }
-                 return "No response from AI. The security model may have blocked the request.";
-             } catch (error) {
-                 console.error("Gemini API call error:", error);
-                 return `Error: Could not retrieve analysis. ${error.message}`;
-             }
-        }
-
         async function analyzeThreat(alertData) {
             const modalBody = document.getElementById('modal-body');
             openModal();
             modalBody.innerHTML = getLoadingSpinner();
             
-            const prompt = `You are a senior cybersecurity analyst. A security alert has been triggered on our network. Here are the details:
-- Threat Type: ${alertData.threat}
-- Source IP: ${alertData.source}
-- Destination IP: ${alertData.destination}
+            const prompt = `As a cybersecurity analyst, analyze this network alert:
+- Threat: ${alertData.threat}
+- Source: ${alertData.source}:${alertData.src_port}
+- Destination: ${alertData.destination}:${alertData.dst_port}
+- Flags: ${alertData.flags}
 - Severity: ${alertData.severity}
 
-Please provide a concise analysis in three parts using Markdown formatting:
-### Threat Explanation
-Briefly explain what this threat is in simple, clear terms.
-### Immediate Actions
-Recommend 3-4 immediate, actionable steps a network administrator should take to mitigate this threat as a numbered list.
-### Potential Cause & Context
-Briefly describe what might have caused this alert and any relevant context.`;
+Provide a detailed analysis in Markdown with these sections:
+### Threat Assessment
+Explain the potential threat and its implications.
+### Port Analysis
+Analyze the destination port ${alertData.dst_port} and what services typically run on it.
+### Flag Interpretation
+Explain what the ${alertData.flags} flags indicate about this traffic.
+### Recommended Actions
+Provide 3-5 specific mitigation steps.`;
 
-            const analysisText = await callGemini(prompt);
-            modalBody.innerHTML = showdownConverter.makeHtml(analysisText);
-            // Apply styling to generated HTML
-            modalBody.querySelectorAll('h3').forEach(h3 => h3.classList.add('text-xl', 'font-bold', 'text-cyan-400', 'mt-4', 'mb-2'));
-            modalBody.querySelectorAll('ul, ol').forEach(list => list.classList.add('list-disc', 'list-inside', 'pl-4', 'space-y-1'));
+            // In a real implementation, you would call your AI API here
+            // For demo purposes, we'll simulate a response
+            setTimeout(() => {
+                const analysisText = `### Threat Assessment
+This ${alertData.threat} attack from ${alertData.source} targeting port ${alertData.dst_port} is ${alertData.severity.toLowerCase()} severity. ${alertData.threat} attacks typically attempt to ${alertData.threat === 'DDoS' ? 'overwhelm network resources' : 'gain unauthorized access'}.
+
+### Port Analysis
+Port ${alertData.dst_port} is commonly used for:
+- ${[80, 443].includes(alertData.dst_port) ? 'HTTP/HTTPS web traffic' : ''}
+- ${alertData.dst_port === 22 ? 'SSH remote access' : ''}
+- ${alertData.dst_port === 3389 ? 'RDP remote desktop' : ''}
+
+### Flag Interpretation
+The ${alertData.flags} flags indicate:
+- ${alertData.flags.includes('SYN') ? 'Connection initiation attempt' : ''}
+- ${alertData.flags.includes('ACK') ? 'Acknowledgement of packets' : ''}
+- ${alertData.flags.includes('FIN') ? 'Connection termination' : ''}
+
+### Recommended Actions
+1. Block source IP ${alertData.source} at the firewall
+2. Monitor port ${alertData.dst_port} for unusual activity
+3. ${alertData.dst_port === 22 ? 'Implement SSH key authentication' : 'Review service configuration'}
+4. Check for related alerts in the past 24 hours`;
+                
+                modalBody.innerHTML = showdownConverter.makeHtml(analysisText);
+                // Apply styling to generated HTML
+                modalBody.querySelectorAll('h3').forEach(h3 => h3.classList.add('text-xl', 'font-bold', 'text-cyan-400', 'mt-4', 'mb-2'));
+                modalBody.querySelectorAll('ul, ol').forEach(list => list.classList.add('list-disc', 'list-inside', 'pl-4', 'space-y-1'));
+            }, 1500);
         }
 
         async function generateTrafficSummary() {
@@ -399,15 +528,26 @@ Briefly describe what might have caused this alert and any relevant context.`;
             summaryBtn.disabled = true;
             summaryBtn.classList.add('opacity-50', 'cursor-not-allowed');
 
-            const prompt = `You are a network traffic analyst. Below is a time-series dataset of network traffic over the last few minutes, showing counts of normal and malicious packets.
-Data: ${JSON.stringify(trafficData.history.slice(-30))}
-
-Please provide a brief, one-paragraph summary of the traffic trend. Highlight any significant spikes in malicious traffic, mention the overall trend (e.g., stable, increasing, erratic), and conclude with a potential implication.`;
-
-            const summaryText = await callGemini(prompt);
-            summaryDiv.innerHTML = summaryText;
-            summaryBtn.disabled = false;
-            summaryBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            // In a real implementation, you would call your AI API here
+            setTimeout(() => {
+                const summaryText = `Network traffic analysis shows ${
+                    trafficData.history.filter(d => d.malicious > 0).length > 3 ? 
+                    'several spikes in malicious activity' : 
+                    'generally stable traffic patterns'
+                }. The most active destination port was ${
+                    Object.entries(trafficData.portActivity).sort((a,b) => b[1]-a[1])[0][0]
+                }, and the most common TCP flags were ${
+                    Object.entries(trafficData.tcpFlags).sort((a,b) => b[1]-a[1])[0][0]
+                }. ${
+                    trafficData.history.slice(-1)[0].malicious > 5 ? 
+                    'Current malicious traffic levels are elevated and warrant investigation.' : 
+                    'Current traffic levels appear normal.'
+                }`;
+                
+                summaryDiv.innerHTML = summaryText;
+                summaryBtn.disabled = false;
+                summaryBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }, 1500);
         }
 
         // --- Modal Handling ---
@@ -436,15 +576,15 @@ Please provide a brief, one-paragraph summary of the traffic trend. Highlight an
 
         document.getElementById('generate-summary-btn').addEventListener('click', generateTrafficSummary);
         
-        // --- Initial Load and Interval Setup ---
+        // --- Initialization ---
         window.onload = function() {
             updateDashboard();
-            setInterval(updateDashboard, 5000); // Update every 5 seconds to reduce visual noise
+            setInterval(updateDashboard, 5000);
         };
+        
         window.onresize = function() {
-            Plotly.Plots.resize('live-traffic-gauge');
-            Plotly.Plots.resize('traffic-composition');
-            Plotly.Plots.resize('traffic-trend');
+            ['live-traffic-gauge', 'traffic-composition', 'port-activity', 'flags-analysis', 'traffic-trend']
+                .forEach(id => Plotly.Plots.resize(id));
         };
     </script>
 </body>
